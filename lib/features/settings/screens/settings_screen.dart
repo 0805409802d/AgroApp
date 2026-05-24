@@ -26,8 +26,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _saving = false;
   bool _exporting = false;
 
-  // Tu número de WhatsApp de soporte
-  static const _supportWhatsApp = '593999999999';
+  // Número de WhatsApp de soporte del administrador (para el botón "Contactar Soporte")
+  static const _supportWhatsApp = '593980991658';
 
   @override
   void initState() {
@@ -56,19 +56,36 @@ class _SettingsScreenState extends State<SettingsScreen> {
     required String discountType,
   }) async {
     final business = context.read<BusinessProvider>().business;
-    if (business == null) return;
+    final businessProvider = context.read<BusinessProvider>();
 
     setState(() => _saving = true);
     try {
-      await _supabase.from('businesses').update({
-        'business_name': _businessNameController.text.trim(),
-        'owner_name': _ownerNameController.text.trim(),
-        'whatsapp_number': _whatsappController.text.trim(),
-        'weight_unit': weightUnit,
-        'discount_type': discountType,
-      }).eq('id', business.id);
+      if (business == null) {
+        // Insert new business
+        final userId = _supabase.auth.currentUser!.id;
+        await _supabase.from('businesses').insert({
+          'user_id': userId,
+          'business_name': _businessNameController.text.trim(),
+          'owner_name': _ownerNameController.text.trim(),
+          'whatsapp_number': _whatsappController.text.trim(),
+          'product_type': 'cacao', // Default product type
+          'weight_unit': weightUnit,
+          'discount_type': discountType,
+          'current_price': 0.00,
+          'is_active': false,
+        });
+      } else {
+        // Update existing business
+        await _supabase.from('businesses').update({
+          'business_name': _businessNameController.text.trim(),
+          'owner_name': _ownerNameController.text.trim(),
+          'whatsapp_number': _whatsappController.text.trim(),
+          'weight_unit': weightUnit,
+          'discount_type': discountType,
+        }).eq('id', business.id);
+      }
 
-      await context.read<BusinessProvider>().loadBusiness();
+      await businessProvider.loadBusiness();
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -108,21 +125,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
       switch (period) {
         case 'week':
           startDate = now.subtract(const Duration(days: 7));
+          // Inicio del día hace 7 días en hora local → UTC
+          startDate = DateTime(startDate.year, startDate.month, startDate.day).toUtc();
+          endDate = DateTime(now.year, now.month, now.day + 1).toUtc(); // fin del día hoy
           periodLabel =
-              '${DateFormat('dd-MM').format(startDate)}_al_${DateFormat('dd-MM-yyyy').format(now)}';
+              '${DateFormat('dd-MM').format(startDate.toLocal())}_al_${DateFormat('dd-MM-yyyy').format(now)}';
           break;
         case 'month':
-          startDate = DateTime(now.year, now.month, 1);
+          startDate = DateTime(now.year, now.month, 1).toUtc();
+          endDate = DateTime(now.year, now.month + 1, 1).toUtc();
           periodLabel = DateFormat('MMMM_yyyy', 'es').format(now);
           break;
         case 'last_month':
           final lm = DateTime(now.year, now.month - 1, 1);
-          startDate = lm;
-          endDate = DateTime(now.year, now.month, 1);
+          startDate = DateTime(lm.year, lm.month, 1).toUtc();
+          endDate = DateTime(now.year, now.month, 1).toUtc();
           periodLabel = DateFormat('MMMM_yyyy', 'es').format(lm);
           break;
         default: // 'today'
-          startDate = DateTime(now.year, now.month, now.day);
+          startDate = DateTime(now.year, now.month, now.day).toUtc();
+          endDate = DateTime(now.year, now.month, now.day + 1).toUtc();
           periodLabel = DateFormat('dd-MM-yyyy').format(now);
       }
 
@@ -271,15 +293,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final business = context.watch<BusinessProvider>().business;
-    if (business == null) {
+    final provider = context.watch<BusinessProvider>();
+    final business = provider.business;
+
+    if (provider.loading) {
       return const Scaffold(
         body: Center(child: CircularProgressIndicator()),
       );
     }
 
     return _SettingsForm(
-      business: business,
+      business: business, // Puede ser null
       businessNameController: _businessNameController,
       ownerNameController: _ownerNameController,
       whatsappController: _whatsappController,
@@ -290,6 +314,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       onSupport: _openSupport,
       onLogout: () async {
         await _supabase.auth.signOut();
+        // ignore: use_build_context_synchronously
         if (mounted) context.go('/login');
       },
     );
@@ -299,7 +324,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
 // ── Formulario separado para mantener el State limpio ────────
 
 class _SettingsForm extends StatefulWidget {
-  final BusinessModel business;
+  final BusinessModel? business;
   final TextEditingController businessNameController;
   final TextEditingController ownerNameController;
   final TextEditingController whatsappController;
@@ -337,13 +362,14 @@ class _SettingsFormState extends State<_SettingsForm> {
   @override
   void initState() {
     super.initState();
-    _weightUnit = widget.business.weightUnit;
-    _discountType = widget.business.discountType;
+    _weightUnit = widget.business?.weightUnit ?? 'quintales';
+    _discountType = widget.business?.discountType ?? 'porcentaje';
   }
 
   @override
   Widget build(BuildContext context) {
-    final expiry = widget.business.subscriptionExpiresAt;
+    final expiry = widget.business?.subscriptionExpiresAt;
+    final isActive = widget.business?.isActive ?? false;
     final expiryLabel = expiry != null
         ? DateFormat('d \'de\' MMMM yyyy', 'es').format(expiry)
         : 'Sin fecha registrada';
@@ -380,12 +406,41 @@ class _SettingsFormState extends State<_SettingsForm> {
                     'Nombre del comerciante',
                     Icons.person,
                   ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 16),
+
+            // ── WhatsApp para recibos ─────────────────────
+            _sectionCard(
+              title: 'Mi número de WhatsApp',
+              icon: Icons.chat,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'Este es el número desde el cual se abrirá WhatsApp al enviar un recibo a un cliente. Debe ser tu número con código de país (Ej: 593981234567).',
+                    style: TextStyle(color: Colors.grey, fontSize: 13),
+                  ),
                   const SizedBox(height: 12),
                   _buildField(
                     widget.whatsappController,
-                    'Tu WhatsApp',
+                    'Tu número de WhatsApp',
                     Icons.phone,
                     type: TextInputType.phone,
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Icon(Icons.info_outline, size: 14, color: Colors.green),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          'Al presionar "Enviar WhatsApp" en una compra, se abrirá desde este número al número del vendedor.',
+                          style: TextStyle(fontSize: 12, color: Colors.green.shade700),
+                        ),
+                      ),
+                    ],
                   ),
                 ],
               ),
@@ -425,17 +480,18 @@ class _SettingsFormState extends State<_SettingsForm> {
             const SizedBox(height: 16),
 
             // ── Exportar ─────────────────────────────────────
-            _sectionCard(
-              title: 'Exportar datos',
-              icon: Icons.download,
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  const Text(
-                    'Descarga tus compras en Excel para cuadrar cuentas con tu contador.',
-                    style:
-                        TextStyle(color: Colors.grey, fontSize: 13),
-                  ),
+            if (widget.business != null)
+              _sectionCard(
+                title: 'Exportar datos',
+                icon: Icons.download,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Descarga tus compras en Excel para cuadrar cuentas con tu contador.',
+                      style:
+                          TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
@@ -478,28 +534,29 @@ class _SettingsFormState extends State<_SettingsForm> {
             const SizedBox(height: 16),
 
             // ── Suscripción y soporte ─────────────────────────
-            _sectionCard(
-              title: 'Suscripción y soporte',
-              icon: Icons.support_agent,
-              child: Column(
-                children: [
-                  // Estado suscripción
-                  Container(
-                    width: double.infinity,
-                    padding: const EdgeInsets.all(14),
-                    decoration: BoxDecoration(
-                      color: widget.business.isActive
-                          ? const Color(0xFFE8F5E9)
-                          : const Color(0xFFFFEBEE),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
+            if (widget.business != null)
+              _sectionCard(
+                title: 'Suscripción y soporte',
+                icon: Icons.support_agent,
+                child: Column(
+                  children: [
+                    // Estado suscripción
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: isActive
+                            ? const Color(0xFFE8F5E9)
+                            : const Color(0xFFFFEBEE),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
                     child: Row(
                       children: [
                         Icon(
-                          widget.business.isActive
+                          isActive
                               ? Icons.check_circle
                               : Icons.warning,
-                          color: widget.business.isActive
+                          color: isActive
                               ? const Color(0xFF1B5E20)
                               : Colors.red,
                         ),
@@ -510,12 +567,12 @@ class _SettingsFormState extends State<_SettingsForm> {
                                 CrossAxisAlignment.start,
                             children: [
                               Text(
-                                widget.business.isActive
+                                isActive
                                     ? 'Plan Activo ✅'
                                     : 'Plan Inactivo ⚠️',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  color: widget.business.isActive
+                                  color: isActive
                                       ? const Color(0xFF1B5E20)
                                       : Colors.red,
                                 ),
@@ -632,7 +689,7 @@ class _SettingsFormState extends State<_SettingsForm> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),

@@ -1,9 +1,11 @@
+// DashboardScreen.dart
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/services/business_provider.dart';
+import '../../../shared/models/business_model.dart';
 import '../../../shared/models/purchase_model.dart';
 
 class DashboardScreen extends StatefulWidget {
@@ -17,7 +19,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final _supabase = Supabase.instance.client;
   List<PurchaseModel> _todayPurchases = [];
   bool _loadingPurchases = true;
-  bool _isOnline = true;
+  // TODO V2: implementar detección real de conectividad (connectivity_plus)
+  final bool _isOnline = true;
 
   // Métricas del día
   double _totalCashPaid = 0;
@@ -40,7 +43,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
     if (business == null) return;
 
     final now = DateTime.now();
-    final startOfDay = DateTime(now.year, now.month, now.day);
+    // Inicio del día en hora local (Ecuador UTC-5), convertido a UTC para Supabase
+    final startOfDay = DateTime(now.year, now.month, now.day).toUtc();
 
     final data = await _supabase
         .from('purchases')
@@ -163,6 +167,57 @@ class _DashboardScreenState extends State<DashboardScreen> {
     // Cuenta bloqueada
     if (business != null && !business.isActive) {
       return _buildInactiveScreen(business.businessName);
+    }
+
+    // Negocio nulo (no completado)
+    if (business == null) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF5F5F5),
+        body: Center(
+          child: Padding(
+            padding: const EdgeInsets.all(32),
+            child: Column(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: [
+                const Icon(Icons.store_mall_directory_outlined, size: 80, color: Colors.orange),
+                const SizedBox(height: 24),
+                const Text(
+                  'Configuración incompleta',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                const Text(
+                  'Falta crear la configuración de tu negocio. Por favor, ve a Ajustes para completarla.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: Colors.grey, fontSize: 16),
+                ),
+                const SizedBox(height: 32),
+                ElevatedButton.icon(
+                  onPressed: () => context.push('/settings'),
+                  icon: const Icon(Icons.settings),
+                  label: const Text('Ir a Ajustes'),
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: const Color(0xFF4CAF50),
+                    foregroundColor: Colors.white,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextButton(
+                  onPressed: () async {
+                    final router = GoRouter.of(context);
+                    await _supabase.auth.signOut();
+                    if (mounted) router.go('/login');
+                  },
+                  child: const Text('Cerrar sesión', style: TextStyle(color: Colors.red)),
+                )
+              ],
+            ),
+          ),
+        ),
+      );
     }
 
     return Scaffold(
@@ -350,7 +405,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -430,7 +485,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
         borderRadius: BorderRadius.circular(12),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.04),
+            color: Colors.black.withValues(alpha: 0.04),
             blurRadius: 6,
             offset: const Offset(0, 2),
           ),

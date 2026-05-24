@@ -6,25 +6,49 @@ import '../../../shared/models/business_model.dart';
 class BusinessProvider extends ChangeNotifier {
   BusinessModel? _business;
   bool _loading = true;
+  String? _error;
 
   BusinessModel? get business => _business;
   bool get loading => _loading;
+  String? get error => _error;
 
   final _supabase = Supabase.instance.client;
 
   Future<void> loadBusiness() async {
+    // Evita llamar a notifyListeners de forma síncrona mientras el widget se está construyendo
+    await Future.microtask(() {});
+
     final userId = _supabase.auth.currentUser?.id;
-    if (userId == null) return;
+    if (userId == null) {
+      _loading = false;
+      notifyListeners();
+      return;
+    }
 
-    final data = await _supabase
-        .from('businesses')
-        .select()
-        .eq('user_id', userId)
-        .single();
-
-    _business = BusinessModel.fromMap(data);
-    _loading = false;
+    _loading = true;
+    _error = null;
     notifyListeners();
+
+    try {
+      final data = await _supabase
+          .from('businesses')
+          .select()
+          .eq('user_id', userId)
+          .maybeSingle(); // maybeSingle() retorna null en vez de lanzar excepción
+
+      if (data != null) {
+        _business = BusinessModel.fromMap(data);
+        _error = null;
+      } else {
+        _business = null;
+        _error = 'no_business'; // negocio no creado aún
+      }
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _loading = false;
+      notifyListeners();
+    }
   }
 
   Future<void> updatePrice(double newPrice) async {
@@ -50,4 +74,4 @@ class BusinessProvider extends ChangeNotifier {
     );
     notifyListeners();
   }
-}
+}

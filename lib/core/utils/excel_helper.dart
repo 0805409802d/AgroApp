@@ -1,11 +1,13 @@
 // excel_helper.dart
-import 'dart:io';
 import 'package:excel/excel.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 import 'package:intl/intl.dart';
-import 'package:path_provider/path_provider.dart';
-import 'package:share_plus/share_plus.dart';
 import '../../shared/models/purchase_model.dart';
 import '../../shared/models/business_model.dart';
+
+// Solo se importa en Web
+// ignore: avoid_web_libraries_in_flutter
+import 'excel_helper_web.dart' if (dart.library.io) 'excel_helper_mobile.dart';
 
 class ExcelHelper {
   static Future<void> exportPurchases({
@@ -79,7 +81,6 @@ class ExcelHelper {
     final unit =
         business.weightUnit == 'quintales' ? 'QQ' : 'Lbs';
 
-    // Reemplazar cabeceras con unidad correcta
     final dynamicHeaders = headers.map((h) {
       if (h == 'Peso Bruto' || h == 'Peso Neto') return '$h ($unit)';
       return h;
@@ -165,36 +166,35 @@ class ExcelHelper {
     });
 
     // ── Ancho de columnas ─────────────────────────────────────
-    sheet.setColumnWidth(0, 14); // Fecha
-    sheet.setColumnWidth(1, 8);  // Hora
-    sheet.setColumnWidth(2, 24); // Agricultor
-    sheet.setColumnWidth(3, 16); // WhatsApp
-    sheet.setColumnWidth(4, 14); // Peso Bruto
-    sheet.setColumnWidth(5, 12); // Descuento
-    sheet.setColumnWidth(6, 14); // Peso Neto
-    sheet.setColumnWidth(7, 14); // Precio
-    sheet.setColumnWidth(8, 12); // Adelanto
-    sheet.setColumnWidth(9, 14); // Total
-    sheet.setColumnWidth(10, 10); // Estado
-    sheet.setColumnWidth(11, 16); // WA Enviado
+    sheet.setColumnWidth(0, 14);
+    sheet.setColumnWidth(1, 8);
+    sheet.setColumnWidth(2, 24);
+    sheet.setColumnWidth(3, 16);
+    sheet.setColumnWidth(4, 14);
+    sheet.setColumnWidth(5, 12);
+    sheet.setColumnWidth(6, 14);
+    sheet.setColumnWidth(7, 14);
+    sheet.setColumnWidth(8, 12);
+    sheet.setColumnWidth(9, 14);
+    sheet.setColumnWidth(10, 10);
+    sheet.setColumnWidth(11, 16);
 
     // Eliminar hoja default
     excel.delete('Sheet1');
 
-    // ── Guardar y compartir ───────────────────────────────────
+    // ── Encode y descargar ────────────────────────────────────
     final bytes = excel.encode();
     if (bytes == null) return;
 
-    final dir = await getTemporaryDirectory();
     final fileName =
         'AgroApp_${business.businessName.replaceAll(' ', '_')}_$periodLabel.xlsx';
-    final file = File('${dir.path}/$fileName');
-    await file.writeAsBytes(bytes);
 
-    await Share.shareXFiles(
-      [XFile(file.path)],
-      subject: 'Reporte AgroApp - ${business.businessName}',
-      text: 'Reporte de compras del período $periodLabel',
-    );
+    if (kIsWeb) {
+      // En Web: descarga directa al navegador
+      downloadFileWeb(bytes, fileName);
+    } else {
+      // En móvil/desktop: guardar y compartir
+      await saveAndShareMobile(bytes, fileName, business.businessName, periodLabel);
+    }
   }
 }

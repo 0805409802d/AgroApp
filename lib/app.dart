@@ -3,11 +3,11 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import 'features/auth/screens/login_screen.dart';
-import 'features/auth/screens/register_screen.dart';
 import 'features/dashboard/screens/dashboard_screen.dart';
 import 'features/history/screens/history_screen.dart';
 import 'features/purchase/screens/purchase_screen.dart';
 import 'features/settings/screens/settings_screen.dart';
+import 'features/cash/screens/cash_screen.dart';
 
 final _supabase = Supabase.instance.client;
 
@@ -26,11 +26,11 @@ final _router = GoRouter(
   },
   routes: [
     GoRoute(path: '/login', builder: (_, __) => const LoginScreen()),
-    GoRoute(path: '/register', builder: (_, __) => const RegisterScreen()),
     GoRoute(path: '/dashboard', builder: (_, __) => const DashboardScreen()),
     GoRoute(path: '/purchase', builder: (_, __) => const PurchaseScreen()),
     GoRoute(path: '/history', builder: (_, __) => const HistoryScreen()),
     GoRoute(path: '/settings', builder: (_, __) => const SettingsScreen()),
+    GoRoute(path: '/cash', builder: (_, __) => const CashScreen()),
   ],
 );
 

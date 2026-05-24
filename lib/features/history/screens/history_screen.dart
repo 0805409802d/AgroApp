@@ -44,13 +44,14 @@ class _HistoryScreenState extends State<HistoryScreen> {
     switch (_dateFilter) {
       case 'yesterday':
         final y = now.subtract(const Duration(days: 1));
-        return DateTime(y.year, y.month, y.day);
+        // Convertimos al inicio del día en hora local, luego a UTC para Supabase
+        return DateTime(y.year, y.month, y.day).toUtc();
       case 'custom':
         return _customDate != null
-            ? DateTime(_customDate!.year, _customDate!.month, _customDate!.day)
-            : DateTime(now.year, now.month, now.day);
+            ? DateTime(_customDate!.year, _customDate!.month, _customDate!.day).toUtc()
+            : DateTime(now.year, now.month, now.day).toUtc();
       default: // 'today'
-        return DateTime(now.year, now.month, now.day);
+        return DateTime(now.year, now.month, now.day).toUtc();
     }
   }
 
@@ -134,7 +135,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
   int get _activeCount =>
       _filtered.where((p) => p.status == 'active').length;
 
-  // ── Anular compra ─────────────────────────────────────────────
+  // ── Anular compra ──────────────────────────────────────────────
 
   Future<void> _cancelPurchase(PurchaseModel purchase) async {
     final confirmed = await showDialog<bool>(
@@ -148,7 +149,8 @@ class _HistoryScreenState extends State<HistoryScreen> {
           '¿Estás seguro de anular la compra de ${purchase.farmerName}?\n\n'
           'Esto restará \$${purchase.totalPaid.toStringAsFixed(2)} y '
           '${purchase.netWeight.toStringAsFixed(2)} ${purchase.weightUnit == 'quintales' ? 'QQ' : 'Lbs'} '
-          'del resumen del día.',
+          'del resumen del día.'
+          '${purchase.advanceDeducted > 0 ? '\n\nSe restaurará el adelanto descontado de \$${purchase.advanceDeducted.toStringAsFixed(2)}.' : ''}',
         ),
         actions: [
           TextButton(
@@ -169,18 +171,59 @@ class _HistoryScreenState extends State<HistoryScreen> {
 
     if (confirmed != true) return;
 
-    await _supabase
-        .from('purchases')
-        .update({'status': 'cancelled'}).eq('id', purchase.id);
+    try {
+      // Marcar la compra como cancelada
+      await _supabase
+          .from('purchases')
+          .update({'status': 'cancelled'}).eq('id', purchase.id);
 
-    if (mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Compra anulada correctamente'),
-          backgroundColor: Colors.orange,
-        ),
-      );
-      _loadPurchases();
+      // Si hubo adelanto descontado, restaurarlo en la tabla advances
+      // Buscamos el adelanto más reciente del agricultor que fue descontado
+      // y restauramos el monto (de forma conservadora: solo si el farmer_id existe)
+      if (purchase.advanceDeducted > 0 && purchase.farmerId != null) {
+        // Buscamos el adelanto 'fully_deducted' o 'active' más reciente del agricultor
+        // y restauramos el monto que fue descontado
+        final advances = await _supabase
+            .from('advances')
+            .select()
+            .eq('farmer_id', purchase.farmerId!)
+            .inFilter('status', ['active', 'fully_deducted'])
+            .order('created_at', ascending: false)
+            .limit(1);
+
+        if ((advances as List).isNotEmpty) {
+          final adv = advances.first;
+          final currentRemaining = (adv['remaining'] as num).toDouble();
+          final originalAmount = (adv['amount'] as num).toDouble();
+          // Restaurar el monto descontado sin exceder el amount original
+          final restored = (currentRemaining + purchase.advanceDeducted)
+              .clamp(0.0, originalAmount);
+
+          await _supabase.from('advances').update({
+            'remaining': restored,
+            'status': restored > 0 ? 'active' : 'fully_deducted',
+          }).eq('id', adv['id']);
+        }
+      }
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Compra anulada correctamente'),
+            backgroundColor: Colors.orange,
+          ),
+        );
+        _loadPurchases();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Error al anular: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
     }
   }
 
@@ -458,7 +501,7 @@ class _HistoryScreenState extends State<HistoryScreen> {
             ? null
             : [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.05),
+                  color: Colors.black.withValues(alpha: 0.05),
                   blurRadius: 8,
                   offset: const Offset(0, 2),
                 ),

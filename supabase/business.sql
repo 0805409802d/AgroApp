@@ -1,0 +1,35 @@
+-- ============================================================
+-- TABLA: business_users (PREPARADA PARA V2 — No usar en MVP)
+-- Permite múltiples usuarios con roles por negocio.
+-- En MVP, solo existe un usuario por negocio (el dueño).
+-- Descomenta y ejecuta cuando implementes multi-usuario.
+-- ============================================================
+
+-- CREATE TABLE IF NOT EXISTS business_users (
+--   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+--   business_id UUID NOT NULL REFERENCES businesses(id) ON DELETE CASCADE,
+--   user_id     UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+--   role        TEXT NOT NULL DEFAULT 'employee'
+--                 CHECK (role IN ('admin', 'employee')),
+--   created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+--   UNIQUE(business_id, user_id)
+-- );
+--
+-- ALTER TABLE business_users ENABLE ROW LEVEL SECURITY;
+-- CREATE POLICY "admin_only" ON business_users
+--   USING (
+--     business_id IN (
+--       SELECT id FROM businesses WHERE user_id = auth.uid()
+--     )
+--   );
+--
+-- -- Actualizar políticas de otras tablas para incluir business_users:
+-- -- DROP POLICY "owner_only" ON purchases;
+-- -- CREATE POLICY "owner_or_employee" ON purchases
+-- --   USING (
+-- --     business_id IN (
+-- --       SELECT id FROM businesses WHERE user_id = auth.uid()
+-- --       UNION
+-- --       SELECT business_id FROM business_users WHERE user_id = auth.uid()
+-- --     )
+-- --   );

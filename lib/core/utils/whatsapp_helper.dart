@@ -14,7 +14,8 @@ class WhatsAppHelper {
     final discountLabel = purchase.discountType == 'porcentaje'
         ? '${purchase.discountValue.toStringAsFixed(1)}%'
         : '${purchase.discountValue.toStringAsFixed(2)} $unit';
-    final product = business.productType[0].toUpperCase() +
+    // Capitaliza la primera letra del tipo de producto
+    final productName = business.productType[0].toUpperCase() +
         business.productType.substring(1);
 
     return '''
@@ -24,7 +25,7 @@ class WhatsAppHelper {
 
 ⚖️ Peso Bruto: ${purchase.grossWeight.toStringAsFixed(2)} $unit
 💧 Merma/Descuento: - $discountLabel
-✅ Peso Neto: ${purchase.netWeight.toStringAsFixed(2)} $unit
+✅ Peso Neto: ${purchase.netWeight.toStringAsFixed(2)} $unit — $productName
 💵 Precio del día: \$${purchase.pricePerUnit.toStringAsFixed(2)}
 ${purchase.advanceDeducted > 0 ? '💳 Adelanto descontado: -\$${purchase.advanceDeducted.toStringAsFixed(2)}\n' : ''}
 💰 *TOTAL PAGADO: \$${purchase.totalPaid.toStringAsFixed(2)}*

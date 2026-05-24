@@ -100,16 +100,6 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                 ),
               ),
-              const SizedBox(height: 16),
-
-              // Ir a registro
-              TextButton(
-                onPressed: () => context.go('/register'),
-                child: const Text(
-                  '¿Negocio nuevo? Regístrate aquí',
-                  style: TextStyle(color: Colors.white70),
-                ),
-              ),
             ],
           ),
         ),

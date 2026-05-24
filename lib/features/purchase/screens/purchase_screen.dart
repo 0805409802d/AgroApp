@@ -1,11 +1,15 @@
+// purchase_screen.dart
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/services/business_provider.dart';
+import '../../../core/services/advance_provider.dart'; // 🆕 FASE 1
 import '../../../core/utils/whatsapp_helper.dart';
 import '../../../shared/models/farmer_model.dart';
 import '../../../shared/models/purchase_model.dart';
+import '../../../shared/models/advance_model.dart'; // 🆕 FASE 1
 
 class PurchaseScreen extends StatefulWidget {
   const PurchaseScreen({super.key});
@@ -28,8 +32,24 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
   List<FarmerModel> _allFarmers = [];
   List<FarmerModel> _filteredFarmers = [];
   bool _showSuggestions = false;
-  String _discountMode = 'porcentaje'; // 'porcentaje' | 'libras'
+  String _discountMode = 'porcentaje';
   bool _saving = false;
+
+  // 🆕 FASE 1 — Adelantos automáticos
+  FarmerModel? _selectedFarmer;
+  List<AdvanceModel> _pendingAdvances = [];
+  List<String> _selectedAdvanceIds = [];
+  List<double> _deductionAmounts = [];
+  double _autoAdvanceDeducted = 0;
+
+  // 🆕 Sistema inteligente de descuentos
+  List<double> _discountSuggestions = []; // chips sugeridos
+  bool _discountAutoFilled = false; // si se autorrellenó
+
+  // 🆕 Errores de validación
+  String? _grossWeightError;
+  String? _discountValueError;
+  String? _advanceError;
 
   // Calculados en tiempo real
   double _netWeight = 0;
@@ -78,6 +98,8 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     });
   }
 
+  // ── Selección de agricultor ───────────────────────────────
+
   void _onFarmerNameChanged(String value) {
     if (value.length < 2) {
       setState(() => _showSuggestions = false);
@@ -85,7 +107,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     }
     final filtered = _allFarmers
         .where((f) => f.name.toLowerCase().contains(value.toLowerCase()))
-        .take(5)
+        .take(20)
         .toList();
     setState(() {
       _filteredFarmers = filtered;
@@ -93,24 +115,152 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     });
   }
 
-  void _selectFarmer(FarmerModel farmer) {
+  // 🆕 FASE 1 — Al seleccionar agricultor cargamos sus adelantos y analizamos descuentos
+  Future<void> _selectFarmer(FarmerModel farmer) async {
     _farmerNameController.text = farmer.name;
     _whatsappController.text = farmer.whatsappNumber ?? '';
-    setState(() => _showSuggestions = false);
+    setState(() {
+      _showSuggestions = false;
+      _selectedFarmer = farmer;
+      _pendingAdvances = [];
+      _selectedAdvanceIds = [];
+      _deductionAmounts = [];
+      _autoAdvanceDeducted = 0;
+      _discountSuggestions = [];
+      _discountAutoFilled = false;
+    });
+    final advanceProvider = context.read<AdvanceProvider>();
+    await advanceProvider.loadPendingAdvances(farmer.id);
+    final advances = advanceProvider.pendingAdvances;
+
+    // 🧠 Análisis de historial de descuentos
+    await _analyzeDiscountHistory(farmer.id);
+
+    if (mounted) {
+      setState(() {
+        _pendingAdvances = advances;
+      });
+    }
   }
+
+  // 🧠 Analiza el historial de descuentos del agricultor
+  Future<void> _analyzeDiscountHistory(String farmerId) async {
+    final business = context.read<BusinessProvider>().business;
+    if (business == null) return;
+
+    final data = await _supabase
+        .from('purchases')
+        .select('discount_value, discount_type')
+        .eq('business_id', business.id)
+        .eq('farmer_id', farmerId)
+        .eq('status', 'active')
+        .order('created_at', ascending: false)
+        .limit(20);
+
+    if ((data as List).isEmpty) return;
+
+    // Agrupar valores de descuento por frecuencia
+    final Map<String, int> freq = {};
+    for (final row in data) {
+      final val = (row['discount_value'] as num).toDouble();
+      final type = row['discount_type'] as String;
+      final key = '${val.toStringAsFixed(2)}_$type';
+      freq[key] = (freq[key] ?? 0) + 1;
+    }
+
+    // Ordenar por frecuencia descendente
+    final sorted = freq.entries.toList()
+      ..sort((a, b) => b.value.compareTo(a.value));
+
+    if (sorted.isEmpty) return;
+
+    // Top valor (el más frecuente)
+    final topEntry = sorted.first;
+    final topParts = topEntry.key.split('_');
+    final topVal = double.parse(topParts[0]);
+    final topType = topParts[1];
+    final topCount = topEntry.value;
+
+    // Si el tipo coincide con el modo actual y hay 5+ repeticiones → autorellenar
+    if (topCount >= 5 && topType == _discountMode) {
+      setState(() {
+        _discountValueController.text = topVal % 1 == 0
+            ? topVal.toInt().toString()
+            : topVal.toStringAsFixed(2);
+        _discountAutoFilled = true;
+      });
+      _recalculate();
+    }
+
+    // Chips: top 4 valores más frecuentes (del mismo tipo de descuento)
+    final suggestions = sorted
+        .where((e) {
+          final parts = e.key.split('_');
+          return parts[1] == _discountMode && double.parse(parts[0]) > 0;
+        })
+        .take(4)
+        .map((e) => double.parse(e.key.split('_')[0]))
+        .toList();
+
+    if (suggestions.length >= 2) {
+      setState(() => _discountSuggestions = suggestions);
+    }
+  }
+
+  // 🆕 FASE 1 — Toggle de selección de un adelanto
+  void _toggleAdvance(AdvanceModel advance, bool? checked) {
+    setState(() {
+      if (checked == true) {
+        _selectedAdvanceIds.add(advance.id);
+        // Descontamos todo el saldo restante (o podrías limitar al total a pagar)
+        _deductionAmounts.add(advance.remaining);
+      } else {
+        final idx = _selectedAdvanceIds.indexOf(advance.id);
+        if (idx != -1) {
+          _selectedAdvanceIds.removeAt(idx);
+          _deductionAmounts.removeAt(idx);
+        }
+      }
+      _recalculateAutoAdvance();
+    });
+  }
+
+  // 🆕 FASE 1 — Suma lo que se va a descontar de los adelantos seleccionados
+  void _recalculateAutoAdvance() {
+    double total = 0;
+    for (final amt in _deductionAmounts) {
+      total += amt;
+    }
+    // No podemos descontar más que el subtotal (el total a pagar sin descuentos)
+    if (total > _subtotal) {
+      total = _subtotal;
+    }
+    setState(() {
+      _autoAdvanceDeducted = total;
+    });
+  }
+
+  // ── Cálculo principal (modificado) ─────────────────────────
 
   void _recalculate() {
     final business = context.read<BusinessProvider>().business;
     if (business == null) return;
 
-    final gross = double.tryParse(
-            _grossWeightController.text.replaceAll(',', '.')) ??
-        0;
-    final discountVal = double.tryParse(
-            _discountValueController.text.replaceAll(',', '.')) ??
-        0;
-    final advance =
-        double.tryParse(_advanceController.text.replaceAll(',', '.')) ?? 0;
+    final grossText = _grossWeightController.text.replaceAll(',', '.');
+    final discountValText = _discountValueController.text.replaceAll(',', '.');
+    final advanceText = _advanceController.text.replaceAll(',', '.');
+
+    setState(() {
+      _grossWeightError = (grossText.isNotEmpty && double.tryParse(grossText) == null) 
+          ? 'Solo se aceptan números' : null;
+      _discountValueError = (discountValText.isNotEmpty && double.tryParse(discountValText) == null) 
+          ? 'Solo se aceptan números' : null;
+      _advanceError = (advanceText.isNotEmpty && double.tryParse(advanceText) == null) 
+          ? 'Solo se aceptan números' : null;
+    });
+
+    final gross = double.tryParse(grossText) ?? 0;
+    final discountVal = double.tryParse(discountValText) ?? 0;
 
     double net;
     if (_discountMode == 'porcentaje') {
@@ -121,14 +271,32 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     if (net < 0) net = 0;
 
     final sub = net * business.currentPrice;
-    final total = sub - advance;
+
+    // 🆕 FASE 1 — El avance a descontar es automático si hay adelantos, si no, manual
+    double advanceToDeduct;
+    if (_pendingAdvances.isNotEmpty) {
+      // Se usa el descuento automático (ya calculado en _recalculateAutoAdvance)
+      advanceToDeduct = _autoAdvanceDeducted;
+    } else {
+      // Se usa el campo manual
+      advanceToDeduct =
+          double.tryParse(_advanceController.text.replaceAll(',', '.')) ?? 0;
+    }
+
+    final total = sub - advanceToDeduct;
 
     setState(() {
       _netWeight = net;
       _subtotal = sub;
       _totalPaid = total < 0 ? 0 : total;
+      // Actualizamos también el límite para no descontar más del subtotal
+      if (_pendingAdvances.isNotEmpty) {
+        _recalculateAutoAdvance();
+      }
     });
   }
+
+  // ── Guardar compra ─────────────────────────────────────────
 
   Future<void> _savePurchase({required bool sendWhatsApp}) async {
     final business = context.read<BusinessProvider>().business;
@@ -156,18 +324,33 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     try {
       // Guardar o actualizar agricultor
       String? farmerId;
-      final existing = _allFarmers.where(
-        (f) => f.name.toLowerCase() == farmerName.toLowerCase(),
-      );
-
-      if (existing.isNotEmpty) {
-        farmerId = existing.first.id;
-        // Actualizar whatsapp si se ingresó uno nuevo
+      if (_selectedFarmer != null) {
         final wa = _whatsappController.text.trim();
-        if (wa.isNotEmpty && existing.first.whatsappNumber != wa) {
-          await _supabase
+        final existingWa = _selectedFarmer!.whatsappNumber ?? '';
+
+        // Si el número es diferente al guardado, es otra persona con el mismo nombre
+        final isNewContact = wa.isNotEmpty && existingWa.isNotEmpty && wa != existingWa;
+
+        if (isNewContact) {
+          // Crear nuevo contacto — misma nombre, diferente teléfono
+          final newFarmer = await _supabase
               .from('farmers')
-              .update({'whatsapp_number': wa}).eq('id', farmerId);
+              .insert({
+                'business_id': business.id,
+                'name': farmerName,
+                'whatsapp_number': wa,
+              })
+              .select()
+              .single();
+          farmerId = newFarmer['id'];
+        } else {
+          farmerId = _selectedFarmer!.id;
+          // Actualizar whatsapp si cambió y no es un contacto nuevo
+          if (wa.isNotEmpty && existingWa != wa) {
+            await _supabase
+                .from('farmers')
+                .update({'whatsapp_number': wa}).eq('id', farmerId);
+          }
         }
       } else {
         // Cliente nuevo
@@ -187,49 +370,76 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
 
       final discountVal = double.tryParse(
               _discountValueController.text.replaceAll(',', '.')) ?? 0;
-      final advance =
-          double.tryParse(_advanceController.text.replaceAll(',', '.')) ?? 0;
 
-      // Insertar compra
-      final insertData = {
-        'business_id': business.id,
-        'farmer_id': farmerId,
-        'farmer_name': farmerName,
-        'farmer_whatsapp': _whatsappController.text.trim().isEmpty
+      // 🆕 FASE 1 — Determinamos el monto final de adelanto a descontar
+      double finalAdvance;
+      List<String>? advanceIds;
+      List<double>? deductionAmounts;
+
+      if (_pendingAdvances.isNotEmpty && _selectedAdvanceIds.isNotEmpty) {
+        // Usar los adelantos automáticos
+        finalAdvance = _autoAdvanceDeducted;
+        advanceIds = _selectedAdvanceIds;
+        deductionAmounts = _deductionAmounts;
+      } else {
+        // Usar el campo manual (o 0)
+        finalAdvance =
+            double.tryParse(_advanceController.text.replaceAll(',', '.')) ?? 0;
+        advanceIds = null;
+        deductionAmounts = null;
+      }
+
+      // 🆕 FASE 1 — Llamamos a la función RPC que inserta la compra y descuenta adelantos
+      await _supabase.rpc('process_purchase_with_advance', params: {
+        'p_business_id': business.id,
+        'p_farmer_id': farmerId,
+        'p_farmer_name': farmerName,
+        'p_gross_weight': gross,
+        'p_discount_type': _discountMode,
+        'p_discount_value': discountVal,
+        'p_net_weight': _netWeight,
+        'p_weight_unit': business.weightUnit,
+        'p_price_per_unit': business.currentPrice,
+        'p_subtotal': _subtotal,
+        'p_advance_deducted': finalAdvance,
+        'p_total_paid': _totalPaid,
+        'p_farmer_whatsapp': _whatsappController.text.trim().isEmpty
             ? null
             : _whatsappController.text.trim(),
-        'gross_weight': gross,
-        'discount_type': _discountMode,
-        'discount_value': discountVal,
-        'net_weight': _netWeight,
-        'weight_unit': business.weightUnit,
-        'price_per_unit': business.currentPrice,
-        'subtotal': _subtotal,
-        'advance_deducted': advance,
-        'total_paid': _totalPaid,
-        'status': 'active',
-        'whatsapp_sent': sendWhatsApp,
-      };
+        'p_advance_ids': advanceIds,
+        'p_deduction_amounts': deductionAmounts,
+      });
 
-      final savedPurchase = await _supabase
-          .from('purchases')
-          .insert(insertData)
-          .select()
-          .single();
-
-      final purchase = PurchaseModel.fromMap(savedPurchase);
-
+      // 🆕 FASE 1 — Recuperamos la compra recién creada para enviar WhatsApp
+      PurchaseModel? savedPurchase;
       if (sendWhatsApp) {
+        final recent = await _supabase
+            .from('purchases')
+            .select()
+            .eq('business_id', business.id)
+            .eq('farmer_id', farmerId!)  // farmerId siempre es no-null aquí
+            .order('created_at', ascending: false)
+            .limit(1)
+            .single();
+        savedPurchase = PurchaseModel.fromMap(recent);
+      }
+
+      // ── Envío WhatsApp (sin cambios mayores) ──────────────
+      if (sendWhatsApp && savedPurchase != null) {
         final wa = _whatsappController.text.trim();
         if (wa.isNotEmpty) {
           final message = WhatsAppHelper.buildReceiptMessage(
             business: business,
-            purchase: purchase,
+            purchase: savedPurchase,
           );
           await WhatsAppHelper.sendReceipt(
             phoneNumber: wa,
             message: message,
           );
+          // Actualizar flag whatsapp_sent en la compra
+          await _supabase
+              .from('purchases')
+              .update({'whatsapp_sent': true}).eq('id', savedPurchase.id);
         } else {
           if (mounted) {
             ScaffoldMessenger.of(context).showSnackBar(
@@ -276,7 +486,6 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
           icon: const Icon(Icons.close),
           onPressed: () => context.pop(),
         ),
-        // Precio del día visible en el AppBar
         actions: [
           Center(
             child: Padding(
@@ -313,7 +522,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     );
   }
 
-  // ── Secciones ────────────────────────────────────────────────
+  // ── Secciones (builders) ────────────────────────────────────
 
   Widget _buildFarmerSection() {
     return _sectionCard(
@@ -327,7 +536,6 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
             textCapitalization: TextCapitalization.words,
             decoration: _fieldDecoration('Nombre del agricultor *'),
           ),
-          // Sugerencias autocomplete
           if (_showSuggestions)
             Container(
               margin: const EdgeInsets.only(top: 4),
@@ -336,25 +544,32 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                 border: Border.all(color: Colors.grey.shade300),
                 borderRadius: BorderRadius.circular(8),
               ),
-              child: Column(
-                children: _filteredFarmers.map((f) {
-                  return ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.person_outline,
-                        color: Color(0xFF2E7D32)),
-                    title: Text(f.name),
-                    subtitle: f.whatsappNumber != null
-                        ? Text(f.whatsappNumber!)
-                        : null,
-                    onTap: () => _selectFarmer(f),
-                  );
-                }).toList(),
+              child: ConstrainedBox(
+                constraints: const BoxConstraints(maxHeight: 250),
+                child: SingleChildScrollView(
+                  child: Column(
+                    children: _filteredFarmers.map((f) {
+                      return ListTile(
+                        dense: true,
+                        leading: const Icon(Icons.person_outline,
+                            color: Color(0xFF2E7D32)),
+                        title: Text(f.name),
+                        subtitle: f.whatsappNumber != null
+                            ? Text(f.whatsappNumber!)
+                            : null,
+                        onTap: () => _selectFarmer(f),
+                      );
+                    }).toList(),
+                  ),
+                ),
               ),
             ),
           const SizedBox(height: 12),
           TextField(
             controller: _whatsappController,
             keyboardType: TextInputType.phone,
+            maxLength: 10,
+            inputFormatters: [FilteringTextInputFormatter.digitsOnly],
             decoration: _fieldDecoration(
               'WhatsApp (opcional)',
               hint: 'Ej: 0991234567',
@@ -380,10 +595,10 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
             decoration: _fieldDecoration(
               'Peso Bruto ($unit)',
               hint: '0.00',
+              errorText: _grossWeightError,
             ),
           ),
           const SizedBox(height: 16),
-          // Toggle porcentaje / libras
           const Text(
             'Tipo de descuento',
             style: TextStyle(color: Colors.grey, fontSize: 13),
@@ -424,10 +639,45 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
                   ? 'Descuento (%)'
                   : 'Descuento ($unit)',
               hint: '0',
+              errorText: _discountValueError,
             ),
           ),
+          if (_discountAutoFilled)
+            Padding(
+              padding: const EdgeInsets.only(top: 8, bottom: 4),
+              child: Row(
+                children: [
+                  const Icon(Icons.auto_awesome, color: Colors.amber, size: 16),
+                  const SizedBox(width: 4),
+                  Text(
+                    'Descuento habitual aplicado automáticamente',
+                    style: TextStyle(color: Colors.amber.shade800, fontSize: 12, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+          if (!_discountAutoFilled && _discountSuggestions.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(top: 8),
+              child: Wrap(
+                spacing: 8,
+                children: _discountSuggestions.map((val) {
+                  final textVal = val % 1 == 0 ? val.toInt().toString() : val.toStringAsFixed(2);
+                  return ActionChip(
+                    label: Text('-$textVal ${_discountMode == 'porcentaje' ? '%' : unit}'),
+                    backgroundColor: const Color(0xFFE8F5E9),
+                    labelStyle: const TextStyle(color: Color(0xFF1B5E20), fontSize: 12),
+                    onPressed: () {
+                      setState(() {
+                        _discountValueController.text = textVal;
+                      });
+                      _recalculate();
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
           const SizedBox(height: 12),
-          // Peso neto en tiempo real
           Container(
             width: double.infinity,
             padding: const EdgeInsets.all(12),
@@ -449,17 +699,59 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     );
   }
 
+  // 🆕 FASE 1 — Sección de adelantos adaptada
   Widget _buildAdvanceSection() {
     return _sectionCard(
       title: 'Adelantos',
       icon: Icons.payments_outlined,
-      child: TextField(
-        controller: _advanceController,
-        keyboardType: const TextInputType.numberWithOptions(decimal: true),
-        decoration: _fieldDecoration(
-          'Descontar adelanto (\$)',
-          hint: '0.00 — dejar vacío si no hay',
+      child: _pendingAdvances.isNotEmpty ? _buildAutoAdvances() : _buildManualAdvance(),
+    );
+  }
+
+  // 🆕 FASE 1 — Widget con checkboxes de adelantos pendientes
+  Widget _buildAutoAdvances() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Text(
+          '⚡ ${_selectedFarmer?.name ?? "El agricultor"} tiene ${_pendingAdvances.length} adelanto(s) pendiente(s). Selecciona los que deseas descontar hoy.',
+          style: TextStyle(color: Colors.orange.shade800, fontWeight: FontWeight.w500),
         ),
+        const SizedBox(height: 8),
+        ..._pendingAdvances.map((adv) {
+          final isSelected = _selectedAdvanceIds.contains(adv.id);
+          return CheckboxListTile(
+            dense: true,
+            contentPadding: EdgeInsets.zero,
+            title: Text(
+              '\$${adv.remaining.toStringAsFixed(2)} — ${adv.createdAt.toLocal().toString().substring(0, 10)}',
+            ),
+            subtitle: adv.notes != null && adv.notes!.isNotEmpty
+                ? Text(adv.notes!, style: const TextStyle(fontSize: 12))
+                : null,
+            value: isSelected,
+            onChanged: (val) => _toggleAdvance(adv, val),
+            controlAffinity: ListTileControlAffinity.leading,
+          );
+        }),
+        const Divider(),
+        Text(
+          'Total a descontar: \$${_autoAdvanceDeducted.toStringAsFixed(2)}',
+          style: const TextStyle(fontWeight: FontWeight.bold),
+        ),
+      ],
+    );
+  }
+
+  // Manual original (sin cambios)
+  Widget _buildManualAdvance() {
+    return TextField(
+      controller: _advanceController,
+      keyboardType: const TextInputType.numberWithOptions(decimal: true),
+      decoration: _fieldDecoration(
+        'Descontar adelanto (\$)',
+        hint: '0.00 — dejar vacío si no hay',
+        errorText: _advanceError,
       ),
     );
   }
@@ -492,9 +784,15 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
             ),
           ),
           if (_advanceController.text.isNotEmpty &&
-              (_advanceController.text != '0'))
+              (_advanceController.text != '0') &&
+              _pendingAdvances.isEmpty)
             Text(
               'Subtotal \$${_subtotal.toStringAsFixed(2)} — Adelanto \$${(double.tryParse(_advanceController.text) ?? 0).toStringAsFixed(2)}',
+              style: const TextStyle(color: Colors.white54, fontSize: 12),
+            ),
+          if (_pendingAdvances.isNotEmpty && _autoAdvanceDeducted > 0)
+            Text(
+              'Subtotal \$${_subtotal.toStringAsFixed(2)} — Adelanto autom. \$${_autoAdvanceDeducted.toStringAsFixed(2)}',
               style: const TextStyle(color: Colors.white54, fontSize: 12),
             ),
         ],
@@ -505,7 +803,6 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
   Widget _buildActionButtons() {
     return Column(
       children: [
-        // Botón primario: Guardar + WhatsApp
         SizedBox(
           width: double.infinity,
           height: 64,
@@ -517,7 +814,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
               style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
             ),
             style: ElevatedButton.styleFrom(
-              backgroundColor: const Color(0xFF25D366), // verde WhatsApp
+              backgroundColor: const Color(0xFF25D366),
               foregroundColor: Colors.white,
               shape: RoundedRectangleBorder(
                 borderRadius: BorderRadius.circular(14),
@@ -526,7 +823,6 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
           ),
         ),
         const SizedBox(height: 12),
-        // Botón secundario: Solo guardar
         SizedBox(
           width: double.infinity,
           height: 52,
@@ -556,7 +852,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     );
   }
 
-  // ── Helpers de UI ────────────────────────────────────────────
+  // ── Helpers de UI (sin cambios) ─────────────────────────────
 
   Widget _sectionCard({
     required String title,
@@ -571,7 +867,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
         borderRadius: BorderRadius.circular(16),
         boxShadow: [
           BoxShadow(
-            color: Colors.black.withOpacity(0.05),
+            color: Colors.black.withValues(alpha: 0.05),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -601,10 +897,11 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     );
   }
 
-  InputDecoration _fieldDecoration(String label, {String? hint}) {
+  InputDecoration _fieldDecoration(String label, {String? hint, String? errorText}) {
     return InputDecoration(
       labelText: label,
       hintText: hint,
+      errorText: errorText,
       border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
       focusedBorder: OutlineInputBorder(
         borderRadius: BorderRadius.circular(10),
