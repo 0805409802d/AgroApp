@@ -38,7 +38,13 @@ _¡Gracias por su confianza!_ 🌱''';
     required String message,
   }) async {
     // Limpiamos el número: solo dígitos
-    final cleaned = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
+    String cleaned = phoneNumber.replaceAll(RegExp(r'[^\d]'), '');
+    
+    // Si es un número de 10 dígitos que empieza con 0 (Ecuador), agregamos el código de país 593
+    if (cleaned.length == 10 && cleaned.startsWith('0')) {
+      cleaned = '593${cleaned.substring(1)}';
+    }
+
     final encoded = Uri.encodeComponent(message);
     final url = 'https://wa.me/$cleaned?text=$encoded';
 
