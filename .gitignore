@@ -46,3 +46,9 @@ app.*.map.json
 
 #env
 .env
+
+# Indicas a Git que ignore el CONTENIDO de build, pero no la carpeta raíz build como tal
+/build/*
+
+# Ahora sí, permites que entre de forma exclusiva a build/web
+!/build/web/

@@ -22,6 +22,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _businessNameController = TextEditingController();
   final _ownerNameController = TextEditingController();
   final _whatsappController = TextEditingController();
+  final _productTypeController = TextEditingController();
 
   bool _saving = false;
   bool _exporting = false;
@@ -40,6 +41,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _businessNameController.dispose();
     _ownerNameController.dispose();
     _whatsappController.dispose();
+    _productTypeController.dispose();
     super.dispose();
   }
 
@@ -49,6 +51,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _businessNameController.text = business.businessName;
     _ownerNameController.text = business.ownerName ?? '';
     _whatsappController.text = business.whatsappNumber ?? '';
+    _productTypeController.text = business.productType;
   }
 
   Future<void> _saveSettings({
@@ -68,7 +71,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'business_name': _businessNameController.text.trim(),
           'owner_name': _ownerNameController.text.trim(),
           'whatsapp_number': _whatsappController.text.trim(),
-          'product_type': 'cacao', // Default product type
+          'product_type': _productTypeController.text.trim().isNotEmpty ? _productTypeController.text.trim() : 'cacao',
           'weight_unit': weightUnit,
           'discount_type': discountType,
           'current_price': 0.00,
@@ -80,6 +83,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
           'business_name': _businessNameController.text.trim(),
           'owner_name': _ownerNameController.text.trim(),
           'whatsapp_number': _whatsappController.text.trim(),
+          'product_type': _productTypeController.text.trim().isNotEmpty ? _productTypeController.text.trim() : 'cacao',
           'weight_unit': weightUnit,
           'discount_type': discountType,
         }).eq('id', business.id);
@@ -307,6 +311,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
       businessNameController: _businessNameController,
       ownerNameController: _ownerNameController,
       whatsappController: _whatsappController,
+      productTypeController: _productTypeController,
       saving: _saving,
       exporting: _exporting,
       onSave: _saveSettings,
@@ -328,6 +333,7 @@ class _SettingsForm extends StatefulWidget {
   final TextEditingController businessNameController;
   final TextEditingController ownerNameController;
   final TextEditingController whatsappController;
+  final TextEditingController productTypeController;
   final bool saving;
   final bool exporting;
   final Future<void> Function({
@@ -343,6 +349,7 @@ class _SettingsForm extends StatefulWidget {
     required this.businessNameController,
     required this.ownerNameController,
     required this.whatsappController,
+    required this.productTypeController,
     required this.saving,
     required this.exporting,
     required this.onSave,
@@ -405,6 +412,12 @@ class _SettingsFormState extends State<_SettingsForm> {
                     widget.ownerNameController,
                     'Nombre del comerciante',
                     Icons.person,
+                  ),
+                  const SizedBox(height: 12),
+                  _buildField(
+                    widget.productTypeController,
+                    'Producto principal (Ej: Cacao, Café, Maíz)',
+                    Icons.agriculture,
                   ),
                 ],
               ),

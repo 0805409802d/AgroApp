@@ -46,8 +46,19 @@ _¡Gracias por su confianza!_ 🌱''';
     }
 
     final encoded = Uri.encodeComponent(message);
-    final url = 'https://wa.me/$cleaned?text=$encoded';
+    
+    // Intentar abrir la app nativa primero
+    final appUrl = 'whatsapp://send?phone=$cleaned&text=$encoded';
+    final webUrl = 'https://wa.me/$cleaned?text=$encoded';
 
-    await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    try {
+      final launched = await launchUrl(Uri.parse(appUrl));
+      if (!launched) {
+        await launchUrl(Uri.parse(webUrl), mode: LaunchMode.externalApplication);
+      }
+    } catch (e) {
+      // Si falla porque el SO bloquea el scheme, usamos el fallback de wa.me
+      await launchUrl(Uri.parse(webUrl), mode: LaunchMode.externalApplication);
+    }
   }
 }
