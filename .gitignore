@@ -30,7 +30,7 @@ migrate_working_dir/
 .flutter-plugins-dependencies
 .pub-cache/
 .pub/
-# /build/ (Comentado — ver excepción !/build/web/ al final del archivo)
+# /build/ — Comentado para que funcione la excepción !/build/web/ abajo
 /coverage/
 
 # Symbolication related
@@ -50,6 +50,3 @@ app.*.map.json
 # Ignora el CONTENIDO de build/ pero permite build/web/
 /build/*
 !/build/web/
-# Nunca subir archivos .env aunque estén dentro de build/web/assets
-build/web/assets/.env
-build/**/.env

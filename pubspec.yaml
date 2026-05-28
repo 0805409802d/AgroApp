@@ -20,8 +20,8 @@ dependencies:
   # Navegación
   go_router: ^13.2.0
 
-  # Variables de entorno (.env)
-  flutter_dotenv: ^5.1.0
+  # Variables de entorno — migradas a lib/core/config/app_config.dart
+  # flutter_dotenv: ^5.1.0  (ya no se necesita)
 
   # WhatsApp
   url_launcher: ^6.2.6
@@ -58,7 +58,6 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
-    - .env
     - assets/images/
 
 flutter_launcher_icons:
