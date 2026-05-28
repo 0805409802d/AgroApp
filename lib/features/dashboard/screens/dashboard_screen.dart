@@ -7,6 +7,7 @@ import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/services/business_provider.dart';
 import '../../../shared/models/business_model.dart';
 import '../../../shared/models/purchase_model.dart';
+import '../../../shared/widgets/offline_status_widget.dart';
 
 class DashboardScreen extends StatefulWidget {
   const DashboardScreen({super.key});
@@ -19,8 +20,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
   final _supabase = Supabase.instance.client;
   List<PurchaseModel> _todayPurchases = [];
   bool _loadingPurchases = true;
-  // TODO V2: implementar detección real de conectividad (connectivity_plus)
-  final bool _isOnline = true;
 
   // Métricas del día
   double _totalCashPaid = 0;
@@ -252,6 +251,8 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
   Widget _buildTopBar(BusinessModel? business) {
     final today = DateFormat('EEEE d MMM', 'es').format(DateTime.now());
+    final isAdmin = context.read<BusinessProvider>().isAdmin;
+
     return Row(
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
@@ -274,11 +275,20 @@ class _DashboardScreenState extends State<DashboardScreen> {
         ),
         Row(
           children: [
-            Icon(
-              _isOnline ? Icons.cloud_done : Icons.cloud_off,
-              color: _isOnline ? Colors.green : Colors.orange,
-            ),
+            const OfflineStatusWidget(),
             const SizedBox(width: 8),
+            if (isAdmin) ...[
+              IconButton(
+                icon: const Icon(Icons.folder_shared_outlined),
+                onPressed: () => context.push('/file_manager'),
+                tooltip: 'Base de Datos',
+              ),
+              IconButton(
+                icon: const Icon(Icons.access_time),
+                onPressed: () => context.push('/alarms'),
+                tooltip: 'Alarmas',
+              ),
+            ],
             IconButton(
               icon: const Icon(Icons.settings_outlined),
               onPressed: () => context.push('/settings'),
@@ -301,9 +311,10 @@ class _DashboardScreenState extends State<DashboardScreen> {
     final unit = business.weightUnit == 'quintales' ? 'Quintal' : 'Libra';
     final product = business.productType[0].toUpperCase() +
         business.productType.substring(1);
+    final isAdmin = context.read<BusinessProvider>().isAdmin;
 
     return GestureDetector(
-      onTap: () => _showPriceEditor(context, business.currentPrice),
+      onTap: isAdmin ? () => _showPriceEditor(context, business.currentPrice) : null,
       child: Container(
         width: double.infinity,
         padding: const EdgeInsets.all(20),
@@ -332,7 +343,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ],
             ),
-            const Icon(Icons.edit, color: Colors.white70, size: 28),
+            if (isAdmin) const Icon(Icons.edit, color: Colors.white70, size: 28),
           ],
         ),
       ),

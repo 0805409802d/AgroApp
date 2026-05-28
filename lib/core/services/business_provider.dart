@@ -2,13 +2,17 @@
 import 'package:flutter/material.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../shared/models/business_model.dart';
+import '../../features/alarms/services/web_alarm_service.dart';
 
 class BusinessProvider extends ChangeNotifier {
   BusinessModel? _business;
+  String _role = 'operator';
   bool _loading = true;
   String? _error;
 
   BusinessModel? get business => _business;
+  String get role => _role;
+  bool get isAdmin => _role == 'admin';
   bool get loading => _loading;
   String? get error => _error;
 
@@ -34,14 +38,44 @@ class BusinessProvider extends ChangeNotifier {
           .from('businesses')
           .select()
           .eq('user_id', userId)
-          .maybeSingle(); // maybeSingle() retorna null en vez de lanzar excepción
+          .maybeSingle();
 
       if (data != null) {
         _business = BusinessModel.fromMap(data);
+        _role = 'admin';
         _error = null;
+        WebAlarmService().initialize(_business!.id);
       } else {
-        _business = null;
-        _error = 'no_business'; // negocio no creado aún
+        // Verificar si es un empleado activo
+        final empData = await _supabase
+            .from('employees')
+            .select('role, business_id')
+            .eq('user_id', userId)
+            .eq('is_active', true)
+            .maybeSingle();
+
+        if (empData != null) {
+          // Segundo query: leer el negocio directamente con business_id
+          final bizData = await _supabase
+              .from('businesses')
+              .select()
+              .eq('id', empData['business_id'])
+              .maybeSingle();
+
+          if (bizData != null) {
+            _business = BusinessModel.fromMap(bizData);
+            _role = empData['role'] as String? ?? 'operator';
+            _error = null;
+          } else {
+            _business = null;
+            _role = 'operator';
+            _error = 'no_business';
+          }
+        } else {
+          _business = null;
+          _role = 'operator';
+          _error = 'no_business';
+        }
       }
     } catch (e) {
       _error = e.toString();

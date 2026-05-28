@@ -10,6 +10,11 @@ import '../../../core/utils/whatsapp_helper.dart';
 import '../../../shared/models/farmer_model.dart';
 import '../../../shared/models/purchase_model.dart';
 import '../../../shared/models/advance_model.dart'; // 🆕 FASE 1
+import 'dart:convert';
+import 'package:uuid/uuid.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../../../core/services/local_db_service.dart';
+import '../../../core/models/offline_models.dart';
 
 class PurchaseScreen extends StatefulWidget {
   const PurchaseScreen({super.key});
@@ -322,50 +327,87 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
     setState(() => _saving = true);
 
     try {
+      bool isOnline = !(await Connectivity().checkConnectivity()).contains(ConnectivityResult.none);
+      
+      String? directoryId;
+      if (isOnline) {
+        final dirData = await _supabase
+            .from('folders')
+            .select('id')
+            .eq('business_id', business.id)
+            .eq('name', 'Directorio de Clientes')
+            .maybeSingle();
+        if (dirData != null) directoryId = dirData['id'];
+      }
+
       // Guardar o actualizar agricultor
       String? farmerId;
       if (_selectedFarmer != null) {
         final wa = _whatsappController.text.trim();
         final existingWa = _selectedFarmer!.whatsappNumber ?? '';
-
-        // Si el número es diferente al guardado, es otra persona con el mismo nombre
         final isNewContact = wa.isNotEmpty && existingWa.isNotEmpty && wa != existingWa;
 
         if (isNewContact) {
-          // Crear nuevo contacto — misma nombre, diferente teléfono
-          final newFarmer = await _supabase
-              .from('farmers')
-              .insert({
-                'business_id': business.id,
-                'name': farmerName,
-                'whatsapp_number': wa,
-              })
-              .select()
-              .single();
-          farmerId = newFarmer['id'];
+          farmerId = const Uuid().v4();
+          final farmerData = {
+            'id': farmerId,
+            'business_id': business.id,
+            'folder_id': directoryId,
+            'name': farmerName,
+            'whatsapp_number': wa,
+          };
+          
+          if (isOnline) {
+            await _supabase.from('farmers').insert(farmerData);
+          } else {
+            await LocalDbService.enqueueMutation(OfflineMutation()
+              ..mutationId = const Uuid().v4()
+              ..collectionName = 'farmers'
+              ..action = 'insert'
+              ..payload = jsonEncode(farmerData)
+              ..createdAt = DateTime.now());
+          }
         } else {
           farmerId = _selectedFarmer!.id;
-          // Actualizar whatsapp si cambió y no es un contacto nuevo
           if (wa.isNotEmpty && existingWa != wa) {
-            await _supabase
-                .from('farmers')
-                .update({'whatsapp_number': wa}).eq('id', farmerId);
+            final updateData = {'id': farmerId, 'whatsapp_number': wa};
+            if (isOnline) {
+              await _supabase.from('farmers').update({'whatsapp_number': wa}).eq('id', farmerId);
+            } else {
+              await LocalDbService.enqueueMutation(OfflineMutation()
+                ..mutationId = const Uuid().v4()
+                ..collectionName = 'farmers'
+                ..action = 'update'
+                ..payload = jsonEncode(updateData)
+                ..createdAt = DateTime.now());
+            }
           }
         }
       } else {
-        // Cliente nuevo
-        final newFarmer = await _supabase
-            .from('farmers')
-            .insert({
-              'business_id': business.id,
-              'name': farmerName,
-              'whatsapp_number': _whatsappController.text.trim().isEmpty
-                  ? null
-                  : _whatsappController.text.trim(),
-            })
-            .select()
-            .single();
-        farmerId = newFarmer['id'];
+        farmerId = const Uuid().v4();
+        final newFarmerData = {
+          'id': farmerId,
+          'business_id': business.id,
+          'folder_id': directoryId,
+          'name': farmerName,
+          'whatsapp_number': _whatsappController.text.trim().isEmpty ? null : _whatsappController.text.trim(),
+        };
+        if (isOnline) {
+          await _supabase.from('farmers').insert(newFarmerData);
+        } else {
+          await LocalDbService.enqueueMutation(OfflineMutation()
+            ..mutationId = const Uuid().v4()
+            ..collectionName = 'farmers'
+            ..action = 'insert'
+            ..payload = jsonEncode(newFarmerData)
+            ..createdAt = DateTime.now());
+            
+          await LocalDbService.cacheFarmers([LocalFarmer()
+             ..supabaseId = farmerId
+             ..businessId = business.id
+             ..name = farmerName
+             ..whatsappNumber = newFarmerData['whatsapp_number'] ?? '']);
+        }
       }
 
       final discountVal = double.tryParse(
@@ -389,8 +431,7 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
         deductionAmounts = null;
       }
 
-      // 🆕 FASE 1 — Llamamos a la función RPC que inserta la compra y descuenta adelantos
-      await _supabase.rpc('process_purchase_with_advance', params: {
+      final rpcParams = {
         'p_business_id': business.id,
         'p_farmer_id': farmerId,
         'p_farmer_name': farmerName,
@@ -403,53 +444,50 @@ class _PurchaseScreenState extends State<PurchaseScreen> {
         'p_subtotal': _subtotal,
         'p_advance_deducted': finalAdvance,
         'p_total_paid': _totalPaid,
-        'p_farmer_whatsapp': _whatsappController.text.trim().isEmpty
-            ? null
-            : _whatsappController.text.trim(),
+        'p_farmer_whatsapp': _whatsappController.text.trim().isEmpty ? null : _whatsappController.text.trim(),
         'p_advance_ids': advanceIds,
         'p_deduction_amounts': deductionAmounts,
-      });
+      };
 
-      // 🆕 FASE 1 — Recuperamos la compra recién creada para enviar WhatsApp
-      PurchaseModel? savedPurchase;
-      if (sendWhatsApp) {
-        final recent = await _supabase
-            .from('purchases')
-            .select()
-            .eq('business_id', business.id)
-            .eq('farmer_id', farmerId!)  // farmerId siempre es no-null aquí
-            .order('created_at', ascending: false)
-            .limit(1)
-            .single();
-        savedPurchase = PurchaseModel.fromMap(recent);
-      }
+      if (isOnline) {
+        await _supabase.rpc('process_purchase_with_advance', params: rpcParams);
 
-      // ── Envío WhatsApp (sin cambios mayores) ──────────────
-      if (sendWhatsApp && savedPurchase != null) {
-        final wa = _whatsappController.text.trim();
-        if (wa.isNotEmpty) {
-          final message = WhatsAppHelper.buildReceiptMessage(
-            business: business,
-            purchase: savedPurchase,
-          );
-          await WhatsAppHelper.sendReceipt(
-            phoneNumber: wa,
-            message: message,
-          );
-          // Actualizar flag whatsapp_sent en la compra
-          await _supabase
+        PurchaseModel? savedPurchase;
+        if (sendWhatsApp) {
+          final recent = await _supabase
               .from('purchases')
-              .update({'whatsapp_sent': true}).eq('id', savedPurchase.id);
-        } else {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Compra guardada. No hay número de WhatsApp para enviar.',
-                ),
-              ),
-            );
+              .select()
+              .eq('business_id', business.id)
+              .eq('farmer_id', farmerId!)
+              .order('created_at', ascending: false)
+              .limit(1)
+              .single();
+          savedPurchase = PurchaseModel.fromMap(recent);
+
+          final wa = _whatsappController.text.trim();
+          if (wa.isNotEmpty) {
+            final message = WhatsAppHelper.buildReceiptMessage(business: business, purchase: savedPurchase);
+            await WhatsAppHelper.sendReceipt(phoneNumber: wa, message: message);
+            await _supabase.from('purchases').update({'whatsapp_sent': true}).eq('id', savedPurchase.id);
+          } else {
+            if (mounted) ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Compra guardada. No hay WhatsApp.')));
           }
+        }
+      } else {
+        await LocalDbService.enqueueMutation(OfflineMutation()
+          ..mutationId = const Uuid().v4()
+          ..collectionName = 'process_purchase_with_advance'
+          ..action = 'rpc'
+          ..payload = jsonEncode(rpcParams)
+          ..createdAt = DateTime.now());
+          
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Modo Offline: Compra guardada en memoria. Se sincronizará al tener internet.'),
+              backgroundColor: Colors.orange,
+            ),
+          );
         }
       }
 

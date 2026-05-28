@@ -8,12 +8,19 @@ import 'core/services/business_provider.dart';
 import 'core/services/advance_provider.dart';
 import 'core/services/cash_provider.dart';
 import 'core/services/dashboard_provider.dart';
+import 'core/services/local_db_service.dart';
+import 'core/services/sync_service.dart';
+import 'core/services/notification_service.dart';
 import 'app.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   await initializeDateFormatting('es');
   await dotenv.load(fileName: '.env');
+
+  await LocalDbService.initialize();
+  await NotificationService.initialize();
+  SyncService.initialize();
 
   await Supabase.initialize(
     url: dotenv.env['SUPABASE_URL']!,

@@ -492,6 +492,43 @@ class _SettingsFormState extends State<_SettingsForm> {
             ),
             const SizedBox(height: 16),
 
+            // ── Personal de trabajo ──────────────────────────
+            if (widget.business != null)
+              _sectionCard(
+                title: 'Personal de trabajo',
+                icon: Icons.group_outlined,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'Gestiona los empleados que pueden registrar compras en tu negocio.',
+                      style: TextStyle(color: Colors.grey, fontSize: 13),
+                    ),
+                    const SizedBox(height: 16),
+                    SizedBox(
+                      width: double.infinity,
+                      height: 52,
+                      child: ElevatedButton.icon(
+                        onPressed: () => context.push('/employees'),
+                        icon: const Icon(Icons.person_add_outlined),
+                        label: const Text(
+                          'Ver y gestionar personal',
+                          style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                        ),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: const Color(0xFF2E7D32),
+                          foregroundColor: Colors.white,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            const SizedBox(height: 16),
+
             // ── Exportar ─────────────────────────────────────
             if (widget.business != null)
               _sectionCard(

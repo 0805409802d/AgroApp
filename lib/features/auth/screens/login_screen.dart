@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'package:flutter/foundation.dart' show kIsWeb;
 
 class LoginScreen extends StatefulWidget {
   const LoginScreen({super.key});
@@ -100,6 +101,24 @@ class _LoginScreenState extends State<LoginScreen> {
                         ),
                 ),
               ),
+
+              if (kIsWeb) ...[
+                const SizedBox(height: 24),
+                TextButton.icon(
+                  onPressed: () {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Descargando APK para Android... (Simulado)'),
+                      ),
+                    );
+                  },
+                  icon: const Icon(Icons.android, color: Colors.white70),
+                  label: const Text(
+                    'Descargar App para Android (Offline)',
+                    style: TextStyle(color: Colors.white70),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
